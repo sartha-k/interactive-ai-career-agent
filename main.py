@@ -1,5 +1,7 @@
 from fastapi import FastAPI, HTTPException
-from langchain.messages import HumanMessage
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+
+
 from pydantic import BaseModel
 import uvicorn
 # Import your existing LangGraph logic here (agent_app, vector_store)
