@@ -7,8 +7,8 @@ from langchain_core.messages import HumanMessage, AIMessage
 st.set_page_config(page_title="Sarthak's AI Portfolio", page_icon="👨‍💻")
 
 # URL for your FastAPI Backend
-BACKEND_URL = "https://onrender.com"
-HEALTH_URL = "https://onrender.com"
+BACKEND_URL = "https://interactive-ai-career-agent.onrender.com"
+HEALTH_URL = "https://interactive-ai-career-agent.onrender.com"
 
 # --- 2. ANALYTICS & TRACKING ---
 # Wrap EVERYTHING in the track block to capture all interactions
