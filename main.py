@@ -51,6 +51,11 @@ async def chat_endpoint(request: ChatRequest):
 if __name__ == "__main__":
     import uvicorn
     import os
-    # Render provides a $PORT environment variable. If it's missing, use 10000.
+    
+    # Render provides the port in the "PORT" environment variable
+    # We must use 0.0.0.0 to allow external traffic
     port = int(os.environ.get("PORT", 10000))
+    
+    print(f"🚀 Starting server on port {port}...")
     uvicorn.run(app, host="0.0.0.0", port=port)
+
