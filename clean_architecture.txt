@@ -1,0 +1,34 @@
+./
+    .env
+    .gitignore
+    .python-version
+    app.py
+    experiments.ipynb
+    frontend.py
+    main.py
+    project_architecture.txt
+    pyproject.toml
+    README.md
+    requirement.txt
+    requirements.txt
+    requirements_backend.txt
+    test.py
+    uv.lock
+    portfolio/
+        CoverLetter/
+            CoverLetter.txt
+        Projects/
+            CIFAR-10 Classification — AlexNet-Inspired.txt
+            fromScratch.txt
+            gan_mnist.txt
+            lora_fine_tune.txt
+            mnistWithCNN.txt
+            MNISTwithNNModule.txt
+            NNModule.txt
+            pytorch.txt
+            Transfer Learning.txt
+            vqa.txt
+        ResearchPaper/
+            VQA.txt
+        Resume/
+            Resume.txt

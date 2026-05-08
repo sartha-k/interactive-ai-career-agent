@@ -1,291 +1,218 @@
-
-
-# %%
+import os
+import sys
 from dotenv import load_dotenv
-import os
 
-# This looks for the .env file in the exact same folder as this script
-load_dotenv(os.path.join(os.getcwd(), '.env')) 
+# Prevent heavy lib crashes
+sys.modules["torch"] = None
+sys.modules["sentence_transformers"] = None
 
-
-# %%
-import os
-import glob
+from langchain_community.embeddings import FastEmbedEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
+from langchain_groq import ChatGroq
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
-from langchain_google_genai import GoogleGenerativeAIEmbeddings 
-from langchain_core.documents import Document
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+load_dotenv()
 
+# -------------------------------
+# 📂 LOAD DOCUMENTS
+# -------------------------------
+def load_portfolio():
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    docs_dir = os.path.join(base_dir, "portfolio")
 
-DOCS_DIR = "portfolio"
-# Create the directory if it doesn't exist so glob doesn't fail
-if not os.path.exists(DOCS_DIR):
-    os.makedirs(DOCS_DIR)
+    docs = []
+    if not os.path.exists(docs_dir):
+        os.makedirs(docs_dir)
+        return []
 
-# 1. The Function Definition
-def load_portfolio(main_dir):
-    docs = [] # Renamed to 'docs' for clarity
-    for root, dirs, files in os.walk(main_dir):
+    for root, _, files in os.walk(docs_dir):
+        category = os.path.basename(root)
+
         for file in files:
             if file.endswith(".txt"):
                 path = os.path.join(root, file)
                 with open(path, "r", encoding="utf-8") as f:
-                    text = f.read()
-                category = os.path.basename(root)
-                docs.append(Document(
-                    page_content=text, 
-                    metadata={"source": file, "category": category}
-                ))
+                    docs.append(Document(
+                        page_content=f.read(),
+                        metadata={"source": file, "category": category}
+                    ))
     return docs
 
-# 2. The Execution (The correct order)
-DOCS_DIR = "portfolio"
-raw_docs = load_portfolio(DOCS_DIR) 
-print(f"Loaded {len(raw_docs)} raw documents.")
-
-# 3. Splitting
-text_splitter = RecursiveCharacterTextSplitter(
-    chunk_size=400, 
-    chunk_overlap=50
-)
-chunks = text_splitter.split_documents(raw_docs) # Final 'chunks' variable
-
-# 4. Final check
-print(f"DEBUG: Successfully created {len(chunks)} small chunks for searching.")
+chunk_size=300
+def chunk_docs(docs):
+    chunks = []
+    for doc in docs:
+        text = doc.page_content
+        for i in range(0, len(text),chunk_size-100):
+            chunks.append(Document(
+                page_content=text[i:i+450],
+                metadata=doc.metadata
+            ))
+    return chunks
 
 
+# -------------------------------
+# 🧠 VECTOR DB
+# -------------------------------
 
+from langchain_community.embeddings import FastEmbedEmbeddings
 
-# %%
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from langchain_community.vectorstores import FAISS
-from langchain_huggingface import HuggingFaceEmbeddings
-
-# This runs 100% on your laptop. No API keys, no rate limits, and it's very fast.
-embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+# This is the ONLY local model that works without Torch/DLL errors
+embeddings = FastEmbedEmbeddings(model_name="BAAI/bge-small-en-v1.5")
 
 
 
-
-
-
-# %%
-import os
-#import google.generativeai as genai
-from dotenv import load_dotenv
-
-
-
-
-# %%
-import os
-from dotenv import load_dotenv
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from langchain_community.vectorstores import FAISS
-
-load_dotenv()
-
-# 1. Use the EXACT model name that was FOUND
-embeddings = GoogleGenerativeAIEmbeddings(
-    model="models/gemini-embedding-001",
-    task_type="retrieval_document"
-)
-# creating chunks
-if chunks:
-    if os.path.exists("faiss_index"):
-        print("Loading existing index...")
-        vector_store = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
-    else:
-        print("Creating new index...")
+if not os.path.exists("faiss_index"):
+    print("🚀 No index found. Building vector store from portfolio...") # Add this
+    raw_docs = load_portfolio()
+    if raw_docs:
+        chunks = chunk_docs(raw_docs)
         vector_store = FAISS.from_documents(chunks, embeddings)
         vector_store.save_local("faiss_index")
+        print(f"✅ Index created with {len(chunks)} chunks.") # Add this
+    else:
+        print("❌ Error: No documents found in portfolio folder!")
+        vector_store = None
+else:
+    print("📂 Loading existing FAISS index...") # Add this
+    vector_store = FAISS.load_local(
+        "faiss_index",
+        embeddings,
+        allow_dangerous_deserialization=True
+    )
 
-    
-    
 
 
-
-# %%
-import os
-import time
-from typing import Annotated, List, TypedDict
-from dotenv import load_dotenv
-
-# LangChain & LangGraph Imports
-from langchain_groq import ChatGroq
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from langchain_community.vectorstores import FAISS
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
-from langchain_core.tools import tool
+# -------------------------------
+# 🤖 LLM (CHEAP + FAST)
+# -------------------------------
+llm = ChatGroq(
+    model="llama-3.1-8b-instant",
+    temperature=0,
+    max_tokens=150
+)
+# -------------------------------
+# 🧠 CORE RAG LOGIC (SIMPLE + STRONG)
+# -------------------------------
 from langgraph.graph import StateGraph, START, END
-from langgraph.graph.message import add_messages
-from langgraph.prebuilt import ToolNode
-from langgraph.checkpoint.memory import MemorySaver
-
-# 1. LOAD API KEYS
-load_dotenv()
-
-# 2. DEFINE THE SEARCH TOOL
-@tool
-def search_portfolio(query: str) -> str:
-    """Searches the portfolio for resume and project details."""
-    # 1. Access the vector_store already created/loaded in the main app
-    # DO NOT re-load the index inside the function; it makes it very slow.
-    global vector_store
-    
-    try:
-        if vector_store is None:
-            return "Error: Vector store not initialized."
-            
-        # 2. Perform the search
-        docs = vector_store.similarity_search(query, k=2)
-        
-        if not docs:
-            return "No relevant information found in the documents."
-            
-        # 3. Format and return the results
-        return "\n\n".join([doc.page_content for doc in docs])
-        
-    except Exception as e:
-        return f"Error during search: {e}"
-
-
-tools = [search_portfolio]
-tool_node = ToolNode(tools)
-
-# 3. CONFIGURE LLM (GROQ)
-# Binding tools tells the LLM it has access to the search function
-llm = ChatGroq(model="llama-3.1-8b-instant", temperature=0)
-llm_with_tools = llm.bind_tools(tools)
-
-# 4. DEFINE STATE SCHEMA
+from langgraph.graph import add_messages
+from typing import TypedDict, List
+from langchain_core.messages import BaseMessage, HumanMessage
+from typing import Annotated    
+from typing_extensions import TypedDict
+# 1. Define the "Notebook" (State)
 class AgentState(TypedDict):
-    messages: Annotated[List[BaseMessage], add_messages]
+    messages: Annotated[list,add_messages]
+    context: str
+    answer: str
+    steps: List[str]
+    count: int
 
-# 5. SYSTEM PROMPT (Crucial for fixing Error 400)
-SYSTEM_PROMPT = SystemMessage(content=(
-    "You are a professional Career Assistant representing [Your Name]. "
-    "Your goal is to answer questions based ONLY on the provided Resume, Projects, and Research documents. "
-    "When asked about skills, experience, or specific projects, you MUST use the search_portfolio tool. "
-    "Be professional, concise, and highlight technical achievements. "
-    "If the information is not found in the documents, politely state that you don't have that information."
-))
-
-# 6. DEFINE GRAPH NODES
-def call_model(state: AgentState):
-    messages = state["messages"]
-    # Ensure system instructions are always present
-    if not isinstance(messages[0], SystemMessage):
-        messages = [SYSTEM_PROMPT] + messages
+# 2. Node: The Retriever
+# 2. Node: The Retriever
+def retrieve(state: AgentState):
+    # ✅ Fixed: Correctly pulling from messages list
+    query = state["messages"][-1].content
     
-    response = llm_with_tools.invoke(messages)
-    return {"messages": [response]}
+    docs = vector_store.similarity_search(query, k=6)
+    context = "\n\n".join([d.page_content for d in docs])
+    
+    return {"context": context, "count": state.get("count", 0) + 1}
 
-def route_tools(state: AgentState):
-    last_msg = state["messages"][-1]
-    if last_msg.tool_calls:
-        return "tools"
-    return END
 
-# 7. BUILD THE WORKFLOW
-builder = StateGraph(AgentState)
 
-builder.add_node("agent", call_model)
-builder.add_node("tools", tool_node)
 
-builder.add_edge(START, "agent")
-builder.add_conditional_edges("agent", route_tools)
-builder.add_edge("tools", "agent")
 
-# 8. COMPILE WITH MEMORY (For conversation history)
-memory = MemorySaver()
-agent_app = builder.compile(checkpointer=memory)
 
-# %%
+# 3. Node: The Grader (The "Logic Check")
+# 3. Node: The Grader (The "Logic Check")
+def grade_results(state: AgentState):
+    context = state["context"].lower()
+    
+    # ❌ FIX: Instead of state["question"], we look at the last message
+    latest_query = state["messages"][-1].content.lower()
+    current_count = state.get("count", 0)
+
+    # Check if we found the venue keywords
+    has_venue = any(k in context for k in ["springer", "icdam", "conference", "journal", "2025"])
+
+    # ❌ FIX: Use latest_query here instead of 'question'
+    if ("published" in latest_query or "paper" in latest_query) and not has_venue:
+        if current_count < 3: 
+            print(f"❌ Venue missing (Attempt {current_count}). Retrying search...")
+            return "rewrite_and_search"
+
+    print("✅ Moving to generation.")
+    return "generate"
+
+
+
+
+# 4. Node: The Answer Generator
+def generate(state: AgentState):
+    # 1. Get the current size of the vector store for the prompt
+    kb_size = vector_store.index.ntotal 
+    
+    # 2. Extract the latest question from the message list
+    current_question = state["messages"][-1].content
+    
+    # 3. Create the System Instructions
+    sys_msg = SystemMessage(content=(
+        "You are Sarthak Sharma's professional Career Assistant.\n"
+        f"FACT: Your knowledge base contains {kb_size} chunks of Sarthak's resume and projects.\n"
+        "INSTRUCTIONS:\n"
+        "- Answer based ONLY on the provided context and chat history.\n"
+        "- If the answer isn't in the context, politely say you don't know.\n"
+        "- Always include specific details like conference names (e.g., ICDAM) or metrics."
+    ))
+    
+    # 4. Create the Context Message (The "RAG" part)
+    # We pass this as a separate message to keep the history clean
+    context_msg = SystemMessage(content=f"SUPPORTING CONTEXT FROM PORTFOLIO:\n{state['context']}")
+    
+    # 5. Build the full payload for the LLM
+    # We combine: Instructions + Context + The Entire Conversation History
+    full_history = [sys_msg, context_msg] + state["messages"]
+    
+    # 6. Call the LLM (Groq)
+    response = llm.invoke(full_history)
+    
+    # 7. Return the update to the state
+    return {
+        "answer": response.content,
+        # 'add_messages' in your AgentState will append this to the history automatically
+        "messages": [AIMessage(content=response.content)],
+        "steps": state.get("steps", []) + ["generate_answer"]
+    }
+
+
+
 from langgraph.checkpoint.memory import MemorySaver
-
-# 1. Initialize Memory
 memory = MemorySaver()
 
-# 2. Re-compile the graph with memory
-# (Using your 'builder' from the previous step)
-app = builder.compile(checkpointer=memory)
+# 5. Build the Graph
+workflow = StateGraph(AgentState)
 
-# %%
-from langgraph.graph import StateGraph, START, END
+workflow.add_node("retrieve", retrieve)
+workflow.add_node("generate", generate)
 
-# 1. Start fresh (this clears the previous 'already exists' errors)
-builder = StateGraph(AgentState)
+workflow.add_edge(START, "retrieve")
 
-# 2. Add your Nodes
-builder.add_node("agent", call_model)
-builder.add_node("tools", tool_node)
-
-# 3. Define the Flow (The "Roads")
-builder.add_edge(START, "agent")
-
-# Add the conditional path
-builder.add_conditional_edges(
-    "agent",
-    route_tools,
+# Add the conditional logic: If grade is bad, we could add a rewrite step.
+# For now, let's connect the flow:
+workflow.add_conditional_edges(
+    "retrieve",
+    grade_results,
     {
-        "tools": "tools", 
-        END: END
+        "generate": "generate",
+        "rewrite_and_search": "retrieve" # It will try to re-retrieve
     }
 )
 
-# Crucial: Connect tools back to agent so it can use the search results
-builder.add_edge("tools", "agent")
+workflow.add_edge("generate", END)
 
-# 4. Compile
-memory = MemorySaver()
-agent_app = builder.compile(checkpointer=memory)
+# Compile
 
-# ... (all previous code: imports, tool, agent_app setup) ...
-
-# 4. STREAMLIT UI SESSION STATE
-import streamlit as st
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
-
-# Display previous messages
-for msg in st.session_state.chat_history:
-    with st.chat_message("user" if isinstance(msg, HumanMessage) else "assistant"):
-        st.write(msg.content)
-
-# 10. THE EXECUTION BLOCK (PUT THIS AT THE VERY END)
-# --- 1. SESSION STATE (Memory for the Web Page) ---
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-# --- 2. DISPLAY CHAT HISTORY ---
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-
-# --- 3. CHAT INPUT ---
-if prompt := st.chat_input("Ask me about my experience or projects..."):
-    # Add user message to history
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
-
-    # --- 4. RUN AGENT ---
-    with st.chat_message("assistant"):
-        with st.spinner("Searching docs..."):
-            # Prepare the input for the agent
-            config = {"configurable": {"thread_id": "st_user_1"}}
-            
-            # Use .invoke to get the final answer
-            result = agent_app.invoke({"messages": [("user", prompt)]}, config)
-            full_response = result["messages"][-1].content
-            
-            st.markdown(full_response)
-            # Add assistant response to history
-            st.session_state.messages.append({"role": "assistant", "content": full_response})
-
-
-
+agent_app = workflow.compile(checkpointer = memory)
 
