@@ -15,7 +15,7 @@ HEALTH_URL = "https://interactive-ai-career-agent.onrender.com"
 
 # --- 2. ANALYTICS & TRACKING ---
 # Wrap EVERYTHING in the track block to capture all interactions
-with st_analytics.track(unsafe_password="your_secret_password"):
+with st_analytics.track(unsafe_password="Sarthak@05"):
 
     # --- 3. SESSION STATE (Memory) ---
     if "messages" not in st.session_state:
